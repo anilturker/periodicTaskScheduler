@@ -1,74 +1,88 @@
 #include "PeriodicTaskScheduler.h"
 #include <iostream>
+#include <sys/time.h>
 
-PeriodicTaskScheduler::PeriodicTaskScheduler() {}
-
-PeriodicTaskScheduler::~PeriodicTaskScheduler() {
-    stop();
+PeriodicTaskScheduler::PeriodicTaskScheduler() {
+    this->currentTime.tv_sec = 0;
+    this->currentTime.tv_usec = 0;
 }
 
-int PeriodicTaskScheduler::addTask(Task task, std::chrono::seconds interval) {
-    std::lock_guard<std::mutex> lock(tasks_mutex);
-    int taskId = nextTaskId++;
-    auto now = std::chrono::system_clock::now();
-    tasks[taskId] = {task, interval, now + interval};
-    std::cout << "Task " << taskId << " added with interval " << interval.count() << " seconds." << std::endl; // Debugging statement
+PeriodicTaskScheduler::~PeriodicTaskScheduler() {
+    this->stop();
+}
+
+int PeriodicTaskScheduler::addTask(Task task, const timeval& interval) {
+    std::lock_guard<std::mutex> lock(this->tasks_mutex);
+    int taskId = this->nextTaskId++;
+    timeval nextExecutionTime = addTimevals(this->currentTime, interval);
+    this->tasks[taskId] = {task, interval, nextExecutionTime};
     return taskId;
 }
 
 void PeriodicTaskScheduler::removeTask(int taskId) {
-    std::lock_guard<std::mutex> lock(tasks_mutex);
-    tasks.erase(taskId);
-    std::cout << "Task " << taskId << " removed." << std::endl; // Debugging statement
+    std::lock_guard<std::mutex> lock(this->tasks_mutex);
+    this->tasks.erase(taskId);
 }
 
-void PeriodicTaskScheduler::changeTaskInterval(int taskId, std::chrono::seconds newInterval) {
-    std::lock_guard<std::mutex> lock(tasks_mutex);
-    if (tasks.find(taskId) != tasks.end()) {
-        tasks[taskId].interval = newInterval;
-        tasks[taskId].nextExecutionTime = std::chrono::system_clock::now() + newInterval;
-        std::cout << "Task " << taskId << " interval changed to " << newInterval.count() << " seconds." << std::endl; // Debugging statement
+void PeriodicTaskScheduler::changeTaskInterval(int taskId, const timeval& newInterval) {
+    std::lock_guard<std::mutex> lock(this->tasks_mutex);
+    if (this->tasks.find(taskId) != this->tasks.end()) {
+        this->tasks[taskId].interval = newInterval;
+        this->tasks[taskId].nextExecutionTime = addTimevals(this->currentTime, newInterval);
     }
 }
 
-void PeriodicTaskScheduler::onNewTime(int newTime) {
-    std::lock_guard<std::mutex> lock(tasks_mutex);
-    std::cout << "onNewTime called with newTime: " << newTime << std::endl; // Debugging statement
-    for (auto& [taskId, task] : tasks) {
-        auto currentTime = std::chrono::system_clock::now();
-        int currentSeconds = std::chrono::duration_cast<std::chrono::seconds>(currentTime.time_since_epoch()).count();
-        std::cout << "Checking task " << taskId << " with next execution time: " << std::chrono::duration_cast<std::chrono::seconds>(task.nextExecutionTime.time_since_epoch()).count() << std::endl; // Debugging statement
-        if (currentSeconds >= std::chrono::duration_cast<std::chrono::seconds>(task.nextExecutionTime.time_since_epoch()).count()) {
-            std::cout << "Executing task " << taskId << std::endl; // Debugging statement
+void PeriodicTaskScheduler::onNewTime(const timeval& newTime) {
+    std::lock_guard<std::mutex> lock(this->tasks_mutex);
+    this->currentTime = newTime;
+    for (auto& [taskId, task] : this->tasks) {
+        if (timevalGreaterOrEqual(this->currentTime, task.nextExecutionTime)) {
             task.task();
-            task.nextExecutionTime = currentTime + task.interval;
+            task.nextExecutionTime = addTimevals(this->currentTime, task.interval);
         }
     }
 }
 
 void PeriodicTaskScheduler::processPackets() {
-    int previousTime = -1;
-    while (running) {
-        auto now = std::chrono::system_clock::now();
-        int currentTime = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+    timeval previousTime = {0, 0};
+    timeval pkt = {0, 0}; // Start with an initial packet time
+    while (this->running) {
+        // Simulate retrieving the latest packet with an external timestamp
+        // Increment the packet time by 1 second for demonstration purposes
+        pkt.tv_sec += 1;
 
-        if (currentTime != previousTime) {
-            onNewTime(currentTime);
-            previousTime = currentTime;
+        if (previousTime.tv_sec != pkt.tv_sec) {
+            this->onNewTime(pkt);
+            previousTime = pkt;
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Simulate packet processing delay
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Simulate real-time packet processing delay
     }
 }
 
 void PeriodicTaskScheduler::start() {
-    running = true;
-    processing_thread = std::thread(&PeriodicTaskScheduler::processPackets, this);
+    this->running = true;
+    this->processing_thread = std::thread(&PeriodicTaskScheduler::processPackets, this);
 }
 
 void PeriodicTaskScheduler::stop() {
-    running = false;
-    if (processing_thread.joinable()) {
-        processing_thread.join();
+    this->running = false;
+    if (this->processing_thread.joinable()) {
+        this->processing_thread.join();
     }
+}
+
+timeval PeriodicTaskScheduler::addTimevals(const timeval& t1, const timeval& t2) {
+    timeval result;
+    result.tv_sec = t1.tv_sec + t2.tv_sec;
+    result.tv_usec = t1.tv_usec + t2.tv_usec;
+    if (result.tv_usec >= 1000000) {
+        result.tv_sec += 1;
+        result.tv_usec -= 1000000;
+    }
+    return result;
+}
+
+bool PeriodicTaskScheduler::timevalGreaterOrEqual(const timeval& t1, const timeval& t2) {
+    return (t1.tv_sec > t2.tv_sec) || (t1.tv_sec == t2.tv_sec && t1.tv_usec >= t2.tv_usec);
 }

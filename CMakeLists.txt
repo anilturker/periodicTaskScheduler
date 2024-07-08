@@ -1,11 +1,9 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.2)
 project(PeriodicTaskScheduler)
 
+# Set the C++ standard
 set(CMAKE_CXX_STANDARD 17)
-
-# Add subdirectories
-add_subdirectory(src)
-add_subdirectory(tests)
+set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Set the Boost root directory
 set(BOOST_ROOT /home/anil/boost_1_85_0)
@@ -31,6 +29,8 @@ else()
     message(FATAL_ERROR "Could not find Boost!")
 endif()
 
-enable_testing()
+# Add subdirectories
+add_subdirectory(src)
+add_subdirectory(tests)
 
 enable_testing()

@@ -1,6 +1,7 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <sys/time.h>
 #include "PeriodicTaskScheduler.h"
 
 void task1() {
@@ -14,17 +15,19 @@ void task2() {
 int main() {
     PeriodicTaskScheduler scheduler;
 
-    std::cout << "Hi there" << std::endl;
+    timeval interval1 = {5, 0}; // 5 seconds interval
+    timeval interval2 = {10, 0}; // 10 seconds interval
 
-    auto taskId1 = scheduler.addTask(task1, std::chrono::seconds(5));
-    auto taskId2 = scheduler.addTask(task2, std::chrono::seconds(10));
+    auto taskId1 = scheduler.addTask(task1, interval1);
+    auto taskId2 = scheduler.addTask(task2, interval2);
 
     scheduler.start();
 
     std::this_thread::sleep_for(std::chrono::seconds(30));  // Run for 30 seconds
 
+    timeval newInterval = {3, 0}; // 3 seconds interval
     scheduler.removeTask(taskId1);
-    scheduler.changeTaskInterval(taskId2, std::chrono::seconds(3));
+    scheduler.changeTaskInterval(taskId2, newInterval);
 
     std::this_thread::sleep_for(std::chrono::seconds(30));  // Run for 30 more seconds
 
