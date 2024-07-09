@@ -1,36 +1,42 @@
 #include <iostream>
+#include <vector>
 #include <thread>
 #include <chrono>
-#include <sys/time.h>
+#include <sys/time.h> // For timeval
 #include "PeriodicTaskScheduler.h"
 
-void task1() {
-    std::cout << "Task 1 executed" << std::endl;
-}
-
-void task2() {
-    std::cout << "Task 2 executed" << std::endl;
+// The task function to be executed periodically
+void periodicTask() {
+    std::cout << "Periodic Task executed" << std::endl;
 }
 
 int main() {
     PeriodicTaskScheduler scheduler;
 
-    timeval interval1 = {5, 0}; // 5 seconds interval
-    timeval interval2 = {10, 0}; // 10 seconds interval
+    // Set the task function
+    scheduler.setTaskFunction(periodicTask);
 
-    auto taskId1 = scheduler.addTask(task1, interval1);
-    auto taskId2 = scheduler.addTask(task2, interval2);
+    // Add tasks with different intervals
+    auto taskId1 = scheduler.addTask(std::chrono::seconds(5));
+    auto taskId2 = scheduler.addTask(std::chrono::seconds(10));
+    auto taskId3 = scheduler.addTask(std::chrono::seconds(15));
 
+    // Start the scheduler
     scheduler.start();
 
-    std::this_thread::sleep_for(std::chrono::seconds(30));  // Run for 30 seconds
+    // Simulate processing packets with external time updates
+    timeval startTime;
+    gettimeofday(&startTime, nullptr);
+    for (int i = 0; i < 30; ++i) {
+        timeval packetTime = startTime;
+        packetTime.tv_sec += i;
 
-    timeval newInterval = {3, 0}; // 3 seconds interval
-    scheduler.removeTask(taskId1);
-    scheduler.changeTaskInterval(taskId2, newInterval);
+        // Simulate processing packets by updating the scheduler with external time
+        scheduler.onNewTime(packetTime);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Simulate some delay
+    }
 
-    std::this_thread::sleep_for(std::chrono::seconds(30));  // Run for 30 more seconds
-
+    // Stop the scheduler
     scheduler.stop();
 
     return 0;

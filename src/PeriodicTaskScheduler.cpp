@@ -1,88 +1,139 @@
 #include "PeriodicTaskScheduler.h"
-#include <iostream>
+#include <algorithm>
 #include <sys/time.h>
 
-PeriodicTaskScheduler::PeriodicTaskScheduler() {
-    this->currentTime.tv_sec = 0;
-    this->currentTime.tv_usec = 0;
+// Constructor to initialize the scheduler with a specified number of threads
+PeriodicTaskScheduler::PeriodicTaskScheduler(int numThreads) : nextTaskId_(1), running_(true) {
+    // Initialize current time
+    gettimeofday(&currentTime_, nullptr);
+
+    // Create threads for executing tasks
+    threads_ = std::vector<std::thread>(numThreads);
+    for (auto &t : threads_) {
+        t = std::thread([this] { this->threadRun(); });
+    }
 }
 
+// Destructor to stop the scheduler and clean up resources
 PeriodicTaskScheduler::~PeriodicTaskScheduler() {
-    this->stop();
+    stop();
 }
 
-int PeriodicTaskScheduler::addTask(Task task, const timeval& interval) {
-    std::lock_guard<std::mutex> lock(this->tasks_mutex);
-    int taskId = this->nextTaskId++;
-    timeval nextExecutionTime = addTimevals(this->currentTime, interval);
-    this->tasks[taskId] = {task, interval, nextExecutionTime};
+// Set the function that will be periodically executed
+void PeriodicTaskScheduler::setTaskFunction(Task taskFunction) {
+    taskFunction_ = taskFunction;
+}
+
+// Add a task to the scheduler with a specified interval
+int PeriodicTaskScheduler::addTask(std::chrono::seconds interval) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    int taskId = nextTaskId_++;
+    timeval nextExecutionTime = currentTime_;
+    nextExecutionTime.tv_sec += interval.count();
+    tasks_[taskId] = {interval, nextExecutionTime, taskId};
+    task_updated_.notify_all();
     return taskId;
 }
 
+// Remove a task from the scheduler using its task ID
 void PeriodicTaskScheduler::removeTask(int taskId) {
-    std::lock_guard<std::mutex> lock(this->tasks_mutex);
-    this->tasks.erase(taskId);
+    std::lock_guard<std::mutex> lock(mutex_);
+    tasks_.erase(taskId);
+    task_updated_.notify_all();
 }
 
-void PeriodicTaskScheduler::changeTaskInterval(int taskId, const timeval& newInterval) {
-    std::lock_guard<std::mutex> lock(this->tasks_mutex);
-    if (this->tasks.find(taskId) != this->tasks.end()) {
-        this->tasks[taskId].interval = newInterval;
-        this->tasks[taskId].nextExecutionTime = addTimevals(this->currentTime, newInterval);
+// Change the interval of an existing task
+void PeriodicTaskScheduler::changeTaskInterval(int taskId, std::chrono::seconds newInterval) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = tasks_.find(taskId);
+    if (it != tasks_.end()) {
+        it->second.interval = newInterval;
+        updateNextExecutionTime(it->second, currentTime_);
+        task_updated_.notify_all();
     }
 }
 
-void PeriodicTaskScheduler::onNewTime(const timeval& newTime) {
-    std::lock_guard<std::mutex> lock(this->tasks_mutex);
-    this->currentTime = newTime;
-    for (auto& [taskId, task] : this->tasks) {
-        if (timevalGreaterOrEqual(this->currentTime, task.nextExecutionTime)) {
-            task.task();
-            task.nextExecutionTime = addTimevals(this->currentTime, task.interval);
-        }
-    }
+// Update the scheduler with an externally provided time
+void PeriodicTaskScheduler::onNewTime(const timeval &externalTime) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    currentTime_ = externalTime;
+    task_updated_.notify_all();
 }
 
-void PeriodicTaskScheduler::processPackets() {
-    timeval previousTime = {0, 0};
-    timeval pkt = {0, 0}; // Start with an initial packet time
-    while (this->running) {
-        // Simulate retrieving the latest packet with an external timestamp
-        // Increment the packet time by 1 second for demonstration purposes
-        pkt.tv_sec += 1;
-
-        if (previousTime.tv_sec != pkt.tv_sec) {
-            this->onNewTime(pkt);
-            previousTime = pkt;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Simulate real-time packet processing delay
-    }
-}
-
+// Start the scheduler in online mode
 void PeriodicTaskScheduler::start() {
-    this->running = true;
-    this->processing_thread = std::thread(&PeriodicTaskScheduler::processPackets, this);
+    std::thread([this] { this->schedulerLoop(); }).detach();
 }
 
+// Stop the scheduler
 void PeriodicTaskScheduler::stop() {
-    this->running = false;
-    if (this->processing_thread.joinable()) {
-        this->processing_thread.join();
+    running_ = false;
+    task_updated_.notify_all();
+    task_available_to_execute_.notify_all();
+    for (auto &t : threads_) {
+        if (t.joinable()) {
+            t.join();
+        }
     }
 }
 
-timeval PeriodicTaskScheduler::addTimevals(const timeval& t1, const timeval& t2) {
-    timeval result;
-    result.tv_sec = t1.tv_sec + t2.tv_sec;
-    result.tv_usec = t1.tv_usec + t2.tv_usec;
-    if (result.tv_usec >= 1000000) {
-        result.tv_sec += 1;
-        result.tv_usec -= 1000000;
-    }
-    return result;
+// Update the next execution time for a task
+void PeriodicTaskScheduler::updateNextExecutionTime(TaskInfo &taskInfo, const timeval &currentTime) {
+    taskInfo.nextExecutionTime = currentTime;
+    taskInfo.nextExecutionTime.tv_sec += taskInfo.interval.count();
 }
 
-bool PeriodicTaskScheduler::timevalGreaterOrEqual(const timeval& t1, const timeval& t2) {
-    return (t1.tv_sec > t2.tv_sec) || (t1.tv_sec == t2.tv_sec && t1.tv_usec >= t2.tv_usec);
+// Check if the current time has elapsed beyond the next execution time of a task
+bool PeriodicTaskScheduler::timeElapsed(const timeval &currentTime, const timeval &nextExecutionTime) {
+    if (currentTime.tv_sec > nextExecutionTime.tv_sec) {
+        return true;
+    } else if (currentTime.tv_sec == nextExecutionTime.tv_sec) {
+        return currentTime.tv_usec >= nextExecutionTime.tv_usec;
+    }
+    return false;
+}
+
+// Main loop for the scheduler to update tasks and manage execution
+void PeriodicTaskScheduler::schedulerLoop() {
+    while (running_) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        task_updated_.wait(lock, [this] {
+            bool tasksReady = false;
+            for (auto &task : tasks_) {
+                if (timeElapsed(currentTime_, task.second.nextExecutionTime)) {
+                    tasksExecQueue_.push_back(task.second);
+                    updateNextExecutionTime(task.second, currentTime_);
+                    tasksReady = true;
+                }
+            }
+            return tasksReady || !running_;
+        });
+
+        while (!tasksExecQueue_.empty()) {
+            auto task = tasksExecQueue_.front();
+            tasksExecQueue_.pop_front();
+            lock.unlock();
+            if (taskFunction_) {
+                taskFunction_();
+            }
+            lock.lock();
+        }
+    }
+}
+
+// Function that runs in each thread to execute tasks
+void PeriodicTaskScheduler::threadRun() {
+    while (running_) {
+        TaskInfo task;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            task_available_to_execute_.wait(lock, [this] { return !tasksExecQueue_.empty() || !running_; });
+            if (!running_) return;
+            task = tasksExecQueue_.front();
+            tasksExecQueue_.pop_front();
+        }
+        if (taskFunction_) {
+            taskFunction_();
+        }
+    }
 }

@@ -1,6 +1,9 @@
 # Set the output directory for the test executables
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
 
+# Add include directories for the source files
+include_directories(${CMAKE_SOURCE_DIR}/src)
+
 # Create the test executable
 add_executable(PeriodicTaskSchedulerTest PeriodicTaskSchedulerTest.cpp)
 
