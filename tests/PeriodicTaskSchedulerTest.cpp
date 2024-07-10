@@ -2,6 +2,8 @@
 #include <boost/test/included/unit_test.hpp>
 #include "PeriodicTaskScheduler.h"
 #include <sys/time.h> // For timeval
+#include <atomic>
+#include <iostream>
 
 BOOST_AUTO_TEST_CASE(TestAddTask) {
     PeriodicTaskScheduler scheduler;
@@ -13,34 +15,53 @@ BOOST_AUTO_TEST_CASE(TestRemoveTask) {
     PeriodicTaskScheduler scheduler;
     int taskId = scheduler.addTask(std::chrono::seconds(5));
     scheduler.removeTask(taskId);
-    // Assuming some internal method to check if task exists (this is just for example)
-    BOOST_CHECK(true); // Check if task was removed correctly
+    BOOST_CHECK(!scheduler.isTaskPresent(taskId));
 }
 
 BOOST_AUTO_TEST_CASE(TestChangeTaskInterval) {
     PeriodicTaskScheduler scheduler;
     int taskId = scheduler.addTask(std::chrono::seconds(5));
     scheduler.changeTaskInterval(taskId, std::chrono::seconds(10));
-    // Assuming some internal method to get task interval (this is just for example)
-    BOOST_CHECK(true); // Check if task interval was changed correctly
+    BOOST_CHECK(scheduler.getTaskInterval(taskId) == std::chrono::seconds(10));
 }
 
 BOOST_AUTO_TEST_CASE(TestOnNewTime) {
     PeriodicTaskScheduler scheduler;
-    timeval newTime;
-    gettimeofday(&newTime, nullptr);
+
+    std::atomic<int> executionCount(0);
+    scheduler.setTaskFunction([&executionCount] {
+        ++executionCount;
+        std::cout << "Task executed. Count: " << executionCount << std::endl;
+    });
+
+    scheduler.start(); // Ensure the scheduler is started before adding tasks
+
+    int taskId1 = scheduler.addTask(std::chrono::seconds(5));
+    int taskId2 = scheduler.addTask(std::chrono::seconds(10));
+
+    timeval startTime;
+    gettimeofday(&startTime, nullptr);
+    timeval newTime = startTime;
     newTime.tv_sec += 5;
     scheduler.onNewTime(newTime);
-    // Assuming some internal method to get current time (this is just for example)
-    BOOST_CHECK(true); // Check if time was updated correctly
+
+    std::this_thread::sleep_for(std::chrono::seconds(6)); // Allow time for tasks to execute
+
+    BOOST_CHECK(executionCount > 0); // Check if tasks were executed
+
+    scheduler.stop(); // Ensure the scheduler is stopped after the test
 }
 
 BOOST_AUTO_TEST_CASE(TestTaskExecution) {
     PeriodicTaskScheduler scheduler;
 
-    int executionCount = 0;
+    // Ensure the scheduler is started before adding tasks
+    scheduler.start();
+
+    std::atomic<int> executionCount(0);
     scheduler.setTaskFunction([&executionCount] {
         ++executionCount;
+        std::cout << "Task executed. Count: " << executionCount << std::endl;
     });
 
     int taskId1 = scheduler.addTask(std::chrono::seconds(1));
@@ -55,16 +76,19 @@ BOOST_AUTO_TEST_CASE(TestTaskExecution) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Simulate some delay
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(6)); // Allow some time for tasks to execute
+    std::this_thread::sleep_for(std::chrono::seconds(10)); // Allow more time for tasks to execute
 
     BOOST_CHECK(executionCount > 0); // Check if tasks were executed
+
+    scheduler.stop(); // Ensure the scheduler is stopped after the test
 }
 
-BOOST_AUTO_TEST_CASE(TestSchedulerStop) {
+BOOST_AUTO_TEST_CASE(TestSchedulerStartStop) {
     PeriodicTaskScheduler scheduler;
+    BOOST_CHECK(!scheduler.isRunning()); // Scheduler should not be running initially
     scheduler.start();
+    BOOST_CHECK(scheduler.isRunning()); // Scheduler should be running after start
     std::this_thread::sleep_for(std::chrono::seconds(1));
     scheduler.stop();
-    // Ensure no tasks are running and scheduler has stopped
-    BOOST_CHECK(true);
+    BOOST_CHECK(!scheduler.isRunning()); // Scheduler should not be running after stop
 }
