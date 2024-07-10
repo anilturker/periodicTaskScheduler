@@ -30,12 +30,11 @@ This project implements a periodic task scheduler in C++. The scheduler allows y
    ```
    make
    ```
-### Running the Tests
-1. **Navigate to the build directory:**
-   ```sh
-   cd build
+### Running the Main Program
    ```
-2. **Run the tests using the test executable:**
+   ./src/main
+   ```
+### Running the Tests
    ```
    ./tests/PeriodicTaskSchedulerTest --log_level=all
    ```
